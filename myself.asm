@@ -71,7 +71,7 @@ BootStartInitialize:
 ; display message
     mov ax, ds 
 	mov es, ax 
-	mov bx, 000ch
+	mov bx, 000dh
 	mov bp, StartBootMessage  ; 13h中断显示字符串 es:bp是字符串地址
     mov cx, StartBootMessageLength 
 	mov dx, 0020h ; 显示字符串的位置，这里是0行32列
@@ -131,33 +131,38 @@ Go_On_Read_Next_Sector:
 Loader_Have_Not_Found:
 	mov ax, ds 
 	mov es, ax 
-	mov bx, 0009h
+	mov bx, 008eh
 	mov bp, NoLoaderFoundMessage
 	mov cx, NoLoaderFoundMessageLength
-	mov dx, 001ch 
+	mov dx, 011ch 
 	mov ax, 1301h
 	int 10h
+	jmp $
 
 ShowLoaderFoundMessage:
 	mov ax, ds 
 	mov es, ax 
-	mov bx, 0021h
+	mov bx, 000ch
 	mov bp, LoaderFoundMessage 
 	mov cx, LoaderFoundMessageLength 
-	mov dx, 001ch 
+	mov dx, 0121h 
 	mov ax, 1301h
 	int 10h
 
+Get_First_Info_In_FAT_Tab:
+	mov ax, 0
+	mov es, ax
+	and di, 0ffe0h 
+	add di, 1ah
+	mov ax, [es:di] 
+	push ax 
 
 Set_Memory_Address:
 	mov ax, BaseOfLoader 
 	mov es, ax 
 	mov bx, OffsetOfLoader 
-
-Get_First_Info_In_FAT_Tab:
-	and di, 0ffe0h 
-	add di, 1ah
-	mov ax, [es:di]
+	
+	pop ax 
 
 Get_Info_From_FAT_Tab:
 	push ax 
@@ -196,6 +201,7 @@ Get_Value_From_FAT_Tab:
 
 Fat_Index_Even:
 	mov bx, [BPB_BytesPerSec]
+	xor dx, dx ; 注意这里一定要对dx置零，因为下一条除法指令是16位的，默认dx是高16位，ax是低16位，而上面的运算完成后，dx=1，那么接下来的除法就会出错
 	div bx 
 	add ax, SectorNumOfFAT1Start 
 	push dx 
@@ -241,7 +247,7 @@ Go_On_Read_Sector:
 	ret 
 
 ; ====== 要用到的变量
-ReadCurrentSectorInRootDir: db SectorNumOfRootDirStart 
+ReadCurrentSectorInRootDir: dw SectorNumOfRootDirStart ;注意这里的dw字数据，一定要是字数据，如果是db数据，那么要在在传参时对ah置零
 ReadSectorsOfRootDirNum: db SectorsOfRootDir 
 LoaderFileName: db 'LOADER  BIN' ; 一共11个字节，最后三个字节是文件拓展名
 Fat_Index_Odd_Or_Even: db 0
