@@ -48,6 +48,7 @@ SectorBanlance equ 17
     BS_VolLab	db	'boot loader'
     BS_FileSysType	db	'FAT12   '
 
+BootStartInitialize:
 ; initialize
     mov ax, cs
     mov es, ax
@@ -73,7 +74,7 @@ SectorBanlance equ 17
 	mov bx, 000ch
 	mov bp, StartBootMessage  ; 13h中断显示字符串 es:bp是字符串地址
     mov cx, StartBootMessageLength 
-	mov dx, 0020h ; 显示字符串的位置
+	mov dx, 0020h ; 显示字符串的位置，这里是0行32列
 	mov ax, 1301h ; al=01显示后光标移到字符串后面
 	int 10h
 ; initial floppy
@@ -86,14 +87,172 @@ Read_Sector_In_Root_Dir_For_Searching_Loader:
 	cmp byte [ReadSectorsOfRootDirNum], 0
 	je Loader_Have_Not_Found
 	dec byte [ReadSectorsOfRootDirNum]
-	; 由于我们要调用int
+	; 由于我们要调用int 13h的2号中断来读取扇区的数据
+	; 但是这里我知道逻辑扇区，所以要转换
+	mov ax, 0
+	mov es, ax 
+	mov ax, [ReadCurrentSectorInRootDir] 
+	mov bx, 8000h ; 缓冲区地址
+	mov cx, 1
+	call Read_One_Sector_From_LBA_To_CHS
+	; 将一个扇区的数据读到缓冲区中后，开始从缓冲区0:8000h处查找loader
+	
+	mov di, 8000h
+	cld ; 设置正向 
+	mov dx, 10h ; 每个扇区查找16次，因为一个扇区16个文件 
+
+Go_on_read_next_file:
+	cmp dx, 0
+	je Go_On_Read_Next_Sector  
+	dec dx 
+	mov si, LoaderFileName ; 接下来用lodsb来传输11次字节数据
+	mov cx, 11 ; 比较11个字节的数据
+
+Read_loader_name_entry:
+	cmp cx, 0
+	je ShowLoaderFoundMessage ; 找到了先显示一串字符串
+	dec cx 
+	lodsb
+	cmp al, [es:di]
+	je Go_on_compare_next_char
+	; 注意这个di加32个字节的算法
+	and di, 0ffe0h
+	add di, 20h
+	jmp short Go_on_read_next_file 
+Go_on_compare_next_char:
+
+	inc di
+	jmp short Read_loader_name_entry 
+
+Go_On_Read_Next_Sector:
+	add word [ReadCurrentSectorInRootDir], 1
+	jmp Read_Sector_In_Root_Dir_For_Searching_Loader
+
+Loader_Have_Not_Found:
+	mov ax, ds 
+	mov es, ax 
+	mov bx, 0009h
+	mov bp, NoLoaderFoundMessage
+	mov cx, NoLoaderFoundMessageLength
+	mov dx, 001ch 
+	mov ax, 1301h
+	int 10h
+
+ShowLoaderFoundMessage:
+	mov ax, ds 
+	mov es, ax 
+	mov bx, 0021h
+	mov bp, LoaderFoundMessage 
+	mov cx, LoaderFoundMessageLength 
+	mov dx, 001ch 
+	mov ax, 1301h
+	int 10h
+
+
+Set_Memory_Address:
+	mov ax, BaseOfLoader 
+	mov es, ax 
+	mov bx, OffsetOfLoader 
+
+Get_First_Info_In_FAT_Tab:
+	and di, 0ffe0h 
+	add di, 1ah
+	mov ax, [es:di]
+
+Get_Info_From_FAT_Tab:
+	push ax 
+	add ax, SectorsOfRootDir 
+	add ax, SectorBanlance 
+	mov cx, 1
+	call Read_One_Sector_From_LBA_To_CHS 
+	pop ax 
+	call Get_Value_From_FAT_Tab
+	cmp ax, 0fffh
+	je Loader_has_been_loaded
+	add bx, [BPB_BytesPerSec]
+	jmp short Get_Info_From_FAT_Tab 
+
+Loader_has_been_loaded:
+	jmp BaseOfLoader:OffsetOfLoader 
+
+
+Get_Value_From_FAT_Tab:
+	push es 
+	push bx 
+	push ax 
+	
+	mov ax, 0
+	mov es, ax 
+
+	pop ax 
+	mov byte [Fat_Index_Odd_Or_Even], 0
+	mov bx, 3
+	mul bx 
+	mov bx, 2
+	div bx
+	cmp dx, 0
+	je Fat_Index_Even 
+	mov byte [Fat_Index_Odd_Or_Even], 1 
+
+Fat_Index_Even:
+	mov bx, [BPB_BytesPerSec]
+	div bx 
+	add ax, SectorNumOfFAT1Start 
+	push dx 
+	mov bx, 8000h
+	mov cx, 1
+	call Read_One_Sector_From_LBA_To_CHS 
+	pop dx 
+	add bx, dx 
+	mov ax, [es:bx]
+	cmp byte [Fat_Index_Odd_Or_Even], 0
+	je Index_Even 
+	shr ax, 4
+
+Index_Even:
+	and ax, 0fffh 
+	pop bx 
+	pop es 
+	ret 
+
+Read_One_Sector_From_LBA_To_CHS:
+	push bp 
+	mov bp, sp 
+	sub sp, 4
+	mov byte [bp-2], cl
+	mov word [bp-4], bx 
+	mov bl, byte [BPB_SecPerTrk]
+	div bl
+	inc ah 
+	mov cl, ah
+	mov dh, al 
+	mov ch, al 
+	shr ch, 1
+	and dh, 1 
+	mov dl, [BS_DrvNum]
+	mov bx, [bp-4]
+	mov al, [bp-2]
+Go_On_Read_Sector:
+	mov ah, 02h
+	int 13h
+	jc Go_On_Read_Sector 
+	add sp, 4
+	pop bp 
+	ret 
+
 ; ====== 要用到的变量
 ReadCurrentSectorInRootDir: db SectorNumOfRootDirStart 
 ReadSectorsOfRootDirNum: db SectorsOfRootDir 
- 
-; messages 
+LoaderFileName: db 'LOADER  BIN' ; 一共11个字节，最后三个字节是文件拓展名
+Fat_Index_Odd_Or_Even: db 0
+
+;==========messages 
 StartBootMessage: db 'Start booting...'
 StartBootMessageLength equ $ - StartBootMessage
+NoLoaderFoundMessage: db 'ERROR: NO LOADER FOUND!'
+NoLoaderFoundMessageLength equ $ - NoLoaderFoundMessage 
+LoaderFoundMessage: db 'Loader Found!'
+LoaderFoundMessageLength equ $ - LoaderFoundMessage 
 
 	times 510 - ($ -$$) db 0
 	db 0x55
